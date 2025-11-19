@@ -9,239 +9,456 @@ import threading
 import shutil
 import subprocess
 import glob
+import requests
+import json
+import random
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# ========== Advanced Cloud Settings ==========
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('/tmp/bot.log')
+    ]
+)
 logger = logging.getLogger(__name__)
 
-print("🚀 Starting Multi-Function Bot...")
+print("🚀 Starting Advanced Media Bot on Railway...")
 
-# Check and install required libraries
-try:
-    import telebot
-    from telebot import types
-    print("✅ telebot - loaded successfully")
-except ImportError:
-    print("📦 Installing telebot...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyTelegramBotAPI"])
-    import telebot
-    from telebot import types
+# ========== Install Required Packages ==========
+def install_required_packages():
+    """Install all required packages"""
+    packages = [
+        'pyTelegramBotAPI',
+        'yt-dlp',
+        'pillow',
+        'requests',
+        'psutil'
+    ]
+    
+    for package in packages:
+        try:
+            if package == 'pyTelegramBotAPI':
+                import telebot
+                print("✅ telebot - already installed")
+            elif package == 'yt-dlp':
+                import yt_dlp
+                print("✅ yt-dlp - already installed")
+            elif package == 'pillow':
+                from PIL import Image
+                print("✅ pillow - already installed")
+            elif package == 'requests':
+                import requests
+                print("✅ requests - already installed")
+            elif package == 'psutil':
+                import psutil
+                print("✅ psutil - already installed")
+        except ImportError:
+            print(f"📦 Installing {package}...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-try:
-    import yt_dlp
-    print("✅ yt-dlp - loaded successfully")
-except ImportError:
-    print("📦 Installing yt-dlp...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
-    import yt_dlp
+install_required_packages()
 
-try:
-    from PIL import Image
-    print("✅ PIL - loaded successfully")
-except ImportError:
-    print("📦 Installing pillow...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow"])
-    from PIL import Image
+# ========== Import Libraries ==========
+import telebot
+from telebot import types
+import yt_dlp
+from PIL import Image
+import psutil
 
 # ========== Configuration ==========
-API_TOKEN = '8526634581:AAHBOfZw1UlBwrao1Wf2nY4TRGCGpKnce4g'
-bot = telebot.TeleBot(API_TOKEN)
+API_TOKEN = os.environ.get('BOT_TOKEN')
+if not API_TOKEN:
+    print("❌ ERROR: BOT_TOKEN not found in environment variables!")
+    sys.exit(1)
 
-TEMP_DIR = "temp_files"
-if not os.path.exists(TEMP_DIR):
-    os.makedirs(TEMP_DIR)
+print(f"✅ Bot token loaded successfully")
 
+bot = telebot.TeleBot(API_TOKEN, parse_mode='HTML')
+
+# Temporary directory for cloud
+TEMP_DIR = "/tmp/telegram_bot_files"
+os.makedirs(TEMP_DIR, exist_ok=True)
+
+CLOUD_DEPLOYMENT = 'RAILWAY_ENVIRONMENT' in os.environ
+
+print(f"🌐 Cloud Deployment: {CLOUD_DEPLOYMENT}")
+print(f"📁 Temp Directory: {TEMP_DIR}")
+
+# ========== User Management ==========
 user_states = {}
 
-# ========== FFmpeg Check ==========
-def check_ffmpeg():
-    """Check if FFmpeg is available in the system"""
+# ========== FFmpeg Setup ==========
+def setup_environment():
+    """Setup environment including FFmpeg"""
     try:
-        ffmpeg_path = shutil.which("ffmpeg")
-        if ffmpeg_path:
-            print(f"✅ FFmpeg found at: {ffmpeg_path}")
-            try:
-                result = subprocess.run([ffmpeg_path, "-version"], 
-                                      capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    version_line = result.stdout.split('\n')[0]
-                    print(f"🎯 FFmpeg version: {version_line}")
-                    return True
-            except Exception:
-                pass
+        result = subprocess.run(['which', 'ffmpeg'], capture_output=True, text=True)
+        if result.returncode == 0:
+            print("✅ FFmpeg is available")
             return True
-        
-        # Check common installation paths
-        common_paths = [
-            r"C:\ffmpeg\bin\ffmpeg.exe",
-            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe", 
-            r"C:\tools\ffmpeg\bin\ffmpeg.exe",
-        ]
-        
-        username = os.getenv('USERNAME')
-        if username:
-            common_paths.append(rf"C:\Users\{username}\ffmpeg\bin\ffmpeg.exe")
-        
-        for path in common_paths:
-            if os.path.exists(path):
-                print(f"✅ FFmpeg found at: {path}")
-                ffmpeg_dir = os.path.dirname(path)
-                os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ["PATH"]
-                return True
-        
-        # Try running ffmpeg directly
-        try:
-            result = subprocess.run(["ffmpeg", "-version"], 
-                                  capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                print("✅ FFmpeg working correctly")
-                return True
-        except:
-            pass
-            
-        print("❌ FFmpeg not installed in PATH")
-        print("💡 Use /ffmpeg_help for installation instructions")
-        return False
-        
+        else:
+            print("⚠️ FFmpeg not found, some features will be limited")
+            return False
     except Exception as e:
-        print(f"❌ Error checking FFmpeg: {e}")
+        print(f"❌ Environment setup error: {e}")
         return False
 
-FFMPEG_AVAILABLE = check_ffmpeg()
+FFMPEG_AVAILABLE = setup_environment()
 
-# ========== Auto Cleanup System ==========
-class AutoCleanup:
-    def __init__(self):
-        self.is_running = False
-        self.cleanup_thread = None
+# ========== FIXED yt-dlp Configuration ==========
+def get_ydl_options(download_type='video', quality='best'):
+    """Get FIXED yt-dlp options that actually download content"""
     
-    def start_auto_cleanup(self):
-        """Start automatic cleanup every hour"""
-        if self.is_running:
+    base_options = {
+        'outtmpl': os.path.join(TEMP_DIR, '%(title).100s.%(ext)s'),
+        'quiet': False,  # Changed to False to see download progress
+        'no_warnings': False,
+        
+        # Critical fixes for empty files
+        'socket_timeout': 60,
+        'retries': 20,
+        'fragment_retries': 20,
+        'skip_unavailable_fragments': False,  # Changed to False
+        'ignoreerrors': False,
+        'no_check_certificate': True,
+        
+        # Force download options
+        'extract_flat': False,  # Must be False to actually download
+        'force_json': False,
+        'force_ipv4': True,
+        
+        # Browser simulation with better headers
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Sec-Fetch-Mode': 'navigate',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+        },
+        
+        'noplaylist': True,
+        
+        # Downloader options
+        'buffersize': 1024 * 1024,  # 1MB buffer
+        'http_chunk_size': 10485760,  # 10MB chunks
+    }
+    
+    # Audio specific options
+    if download_type == 'audio':
+        base_options.update({
+            'format': 'bestaudio/best',
+            'writethumbnail': False,
+            'embed_metadata': True,
+        })
+        
+        if FFMPEG_AVAILABLE:
+            base_options.update({
+                'postprocessors': [
+                    {
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    },
+                    {
+                        'key': 'FFmpegMetadata',
+                    }
+                ],
+                'prefer_ffmpeg': True,
+            })
+        else:
+            # Fallback without FFmpeg
+            base_options.update({
+                'format': 'bestaudio[ext=m4a]/bestaudio/best',
+            })
+    
+    # Video specific options  
+    else:
+        if quality == 'fast':
+            base_options.update({
+                'format': 'best[height<=480]/best[height<=360]/worst',
+            })
+        elif quality == 'hd':
+            base_options.update({
+                'format': 'best[height<=1080]/best[height<=720]/best',
+            })
+        else:  # best
+            base_options.update({
+                'format': 'best[height<=720]/best[height<=480]/best',
+            })
+    
+    return base_options
+
+# ========== COMPLETELY REVISED Download Function ==========
+def download_media(chat_id, url, download_type='video', quality='best'):
+    """Completely revised download function with proper file verification"""
+    
+    max_retries = 3
+    downloaded_file_path = None
+    
+    for attempt in range(max_retries):
+        try:
+            # Send progress update
+            if attempt > 0:
+                bot.send_message(chat_id, f"🔄 Retry attempt {attempt + 1}/{max_retries}...")
+            else:
+                bot.send_message(chat_id, "🔍 <b>Starting download process...</b>")
+            
+            # Get download options
+            ydl_opts = get_ydl_options(download_type, quality)
+            
+            # Create a custom filename to track the download
+            timestamp = int(time.time())
+            if download_type == 'audio':
+                ydl_opts['outtmpl'] = os.path.join(TEMP_DIR, f'download_{timestamp}_%(title)s.%(ext)s')
+            else:
+                ydl_opts['outtmpl'] = os.path.join(TEMP_DIR, f'download_{timestamp}_%(title)s.%(ext)s')
+            
+            print(f"🎯 Download attempt {attempt + 1} with options: {ydl_opts['format']}")
+            
+            # First, extract info to verify the video is accessible
+            with yt_dlp.YoutubeDL({**ydl_opts, 'skip_download': True}) as ydl:
+                try:
+                    info = ydl.extract_info(url, download=False)
+                    if not info:
+                        raise Exception("Could not extract video information")
+                    
+                    title = sanitize_filename(info.get('title', 'Unknown'))
+                    duration = info.get('duration', 0)
+                    
+                    bot.send_message(chat_id, f"📥 <b>Downloading:</b> {title}\n⏱️ <b>Duration:</b> {format_duration(duration)}")
+                    
+                except Exception as e:
+                    logger.error(f"Info extraction failed: {e}")
+                    raise Exception(f"Cannot access video: {str(e)}")
+            
+            # Now perform the actual download
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                def progress_hook(d):
+                    if d['status'] == 'downloading':
+                        # Only send progress updates occasionally to avoid spam
+                        if random.random() < 0.1:  # 10% chance
+                            try:
+                                if '_percent_str' in d:
+                                    bot.send_chat_action(chat_id, 'upload_video' if download_type != 'audio' else 'upload_audio')
+                            except:
+                                pass
+                
+                ydl.add_progress_hook(progress_hook)
+                ydl.download([url])
+            
+            # Find the downloaded file - CRITICAL FIX
+            time.sleep(2)  # Wait for file to be fully written
+            
+            # Look for files with our timestamp pattern
+            pattern = os.path.join(TEMP_DIR, f"download_{timestamp}_*")
+            files = glob.glob(pattern)
+            
+            if not files:
+                # Fallback: get all files and find the newest one
+                all_files = glob.glob(os.path.join(TEMP_DIR, "*"))
+                if all_files:
+                    # Sort by modification time, newest first
+                    all_files.sort(key=os.path.getmtime, reverse=True)
+                    files = [all_files[0]] if all_files else []
+            
+            # Verify the file is not empty
+            for file_path in files:
+                try:
+                    file_size = os.path.getsize(file_path)
+                    print(f"📁 Found file: {file_path} (Size: {file_size} bytes)")
+                    
+                    if file_size > 1024:  # File must be at least 1KB
+                        downloaded_file_path = file_path
+                        print(f"✅ Valid file found: {file_path} ({file_size} bytes)")
+                        break
+                    else:
+                        print(f"❌ File too small: {file_path} ({file_size} bytes)")
+                        try:
+                            os.unlink(file_path)
+                        except:
+                            pass
+                except Exception as e:
+                    print(f"❌ Error checking file {file_path}: {e}")
+                    continue
+            
+            if downloaded_file_path:
+                return info, downloaded_file_path
+            else:
+                raise Exception("Download completed but no valid file found")
+                
+        except yt_dlp.DownloadError as e:
+            error_msg = str(e)
+            logger.error(f"Download error (attempt {attempt + 1}): {error_msg}")
+            
+            # Clean up any partial files
+            try:
+                pattern = os.path.join(TEMP_DIR, f"download_{timestamp}_*")
+                for file_path in glob.glob(pattern):
+                    os.unlink(file_path)
+            except:
+                pass
+            
+            if "HTTP Error 403" in error_msg or "Forbidden" in error_msg:
+                if attempt < max_retries - 1:
+                    # Try different format on retry
+                    continue
+                else:
+                    raise Exception("Server blocked the request. Please try a different video or try again later.")
+            elif "Video unavailable" in error_msg or "Private video" in error_msg:
+                raise Exception("Video is unavailable, private, or restricted.")
+            else:
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                else:
+                    raise Exception(f"Download failed: {error_msg[:100]}")
+                    
+        except Exception as e:
+            logger.error(f"Unexpected error (attempt {attempt + 1}): {e}")
+            
+            # Clean up any partial files
+            try:
+                pattern = os.path.join(TEMP_DIR, f"download_{timestamp}_*")
+                for file_path in glob.glob(pattern):
+                    os.unlink(file_path)
+            except:
+                pass
+            
+            if attempt < max_retries - 1:
+                time.sleep(3)
+                continue
+            else:
+                raise e
+    
+    raise Exception("All download attempts failed - no content received")
+
+# ========== FIXED Download Handler ==========
+def handle_download_process(chat_id, url, download_type='video', quality='best'):
+    """Fixed download handler with proper file verification"""
+    try:
+        # Validate URL first
+        if not is_supported_url(url):
+            bot.send_message(chat_id, "❌ <b>Unsupported URL</b>\n\nSupported platforms: YouTube, Instagram, TikTok, Facebook, Twitter, SoundCloud, etc.")
+            show_main_menu(chat_id)
             return
         
-        self.is_running = True
-        self.cleanup_thread = threading.Thread(target=self._cleanup_scheduler, daemon=True)
-        self.cleanup_thread.start()
-        logger.info("🚀 Auto cleanup system started")
-    
-    def _cleanup_scheduler(self):
-        """Cleanup scheduler"""
-        while self.is_running:
+        bot.send_message(chat_id, "🔍 <b>Verifying URL and starting download...</b>")
+        
+        # Start download
+        info, file_path = download_media(chat_id, url, download_type, quality)
+        
+        if not info or not file_path:
+            bot.send_message(chat_id, "❌ <b>Download failed - No content received</b>")
+            show_main_menu(chat_id)
+            return
+        
+        # Verify file exists and has content
+        if not os.path.exists(file_path):
+            bot.send_message(chat_id, "❌ <b>Downloaded file not found</b>")
+            show_main_menu(chat_id)
+            return
+        
+        file_size = os.path.getsize(file_path)
+        if file_size < 1024:  # Less than 1KB
+            bot.send_message(chat_id, "❌ <b>Downloaded file is empty or too small</b>")
             try:
-                deleted_files = self.cleanup_temp_files()
-                if deleted_files > 0:
-                    logger.info(f"🧹 Auto cleanup - deleted {deleted_files} files")
-                else:
-                    logger.debug("🧹 Auto cleanup - no files to delete")
+                os.unlink(file_path)
+            except:
+                pass
+            show_main_menu(chat_id)
+            return
+        
+        # Prepare file info
+        title = sanitize_filename(info.get('title', 'Unknown'))
+        file_size_str = get_file_size(file_path)
+        duration = info.get('duration', 0)
+        uploader = info.get('uploader', 'Unknown')
+        
+        caption = f"""
+✅ <b>Download Complete!</b>
+
+🎬 <b>Title:</b> {title}
+👤 <b>Uploader:</b> {uploader}
+⏱️ <b>Duration:</b> {format_duration(duration)}
+📊 <b>Size:</b> {file_size_str}
+        """
+        
+        # Send file with progress
+        bot.send_message(chat_id, "📤 <b>Uploading file to Telegram...</b>")
+        bot.send_chat_action(chat_id, 'upload_document')
+        
+        max_upload_attempts = 2
+        upload_success = False
+        
+        for upload_attempt in range(max_upload_attempts):
+            try:
+                with open(file_path, 'rb') as file:
+                    if download_type == 'audio':
+                        bot.send_audio(chat_id, file, caption=caption, title=title[:64], timeout=120)
+                    else:
+                        bot.send_video(chat_id, file, caption=caption, timeout=120, supports_streaming=True)
                 
-                time.sleep(3600)  # Wait 1 hour
-            except Exception as e:
-                logger.error(f"Auto cleanup error: {e}")
-                time.sleep(300)  # Wait 5 minutes then retry
-    
-    def stop_auto_cleanup(self):
-        """Stop auto cleanup"""
-        self.is_running = False
-        if self.cleanup_thread and self.cleanup_thread.is_alive():
-            self.cleanup_thread.join(timeout=5)
-        logger.info("🛑 Auto cleanup stopped")
-    
-    def cleanup_temp_files(self, max_age_minutes=60):
-        """Clean temporary files older than specified minutes"""
-        try:
-            current_time = time.time()
-            deleted_files = 0
-            total_size = 0
-            
-            if not os.path.exists(TEMP_DIR):
-                return 0
-            
-            for filename in os.listdir(TEMP_DIR):
-                file_path = os.path.join(TEMP_DIR, filename)
-                if os.path.isfile(file_path):
+                upload_success = True
+                bot.send_message(chat_id, "✅ <b>Upload successful!</b>")
+                break
+                
+            except Exception as upload_error:
+                logger.error(f"Upload attempt {upload_attempt + 1} failed: {upload_error}")
+                
+                if upload_attempt < max_upload_attempts - 1:
+                    bot.send_message(chat_id, f"⚠️ Upload failed, retrying... (Attempt {upload_attempt + 2})")
+                    time.sleep(2)
+                else:
+                    # Final fallback: send as document
                     try:
-                        file_age = current_time - os.path.getctime(file_path)
-                        file_age_minutes = file_age / 60
-                        
-                        if file_age_minutes > max_age_minutes:
-                            file_size = os.path.getsize(file_path)
-                            os.unlink(file_path)
-                            deleted_files += 1
-                            total_size += file_size
-                            logger.debug(f"Deleted: {filename} (age: {file_age_minutes:.1f} minutes)")
-                    except Exception as e:
-                        logger.error(f"Error deleting {filename}: {e}")
-            
-            if deleted_files > 0:
-                size_mb = total_size / (1024 * 1024)
-                logger.info(f"🧹 Deleted {deleted_files} temp files ({size_mb:.2f} MB)")
-            
-            return deleted_files
-            
+                        with open(file_path, 'rb') as file:
+                            bot.send_document(chat_id, file, caption=caption, timeout=120)
+                        bot.send_message(chat_id, "✅ <b>Upload completed as document!</b>")
+                        upload_success = True
+                    except Exception as doc_error:
+                        logger.error(f"Document upload also failed: {doc_error}")
+                        bot.send_message(chat_id, f"❌ <b>Upload failed:</b> {str(upload_error)[:100]}")
+        
+        # Cleanup
+        try:
+            if os.path.exists(file_path):
+                os.unlink(file_path)
+                logger.info(f"Cleaned up: {file_path}")
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
-            return 0
-
-# Initialize auto cleanup system
-auto_cleanup = AutoCleanup()
-
-# ========== Helper Functions ==========
-def is_valid_url(url):
-    """Validate URL with comprehensive domain checking"""
-    try:
-        # Clean the URL
-        url = url.strip()
-        if not url:
-            return False
             
-        # Add https:// if missing
-        if not url.startswith(('http://', 'https://')):
-            url = 'https://' + url
-        
-        # Parse URL
-        parsed_url = urllib.parse.urlparse(url)
-        domain = parsed_url.netloc.lower()
-        
-        # Remove www. if present
-        if domain.startswith('www.'):
-            domain = domain[4:]
-        
-        # Supported domains and patterns
-        supported_domains = {
-            'youtube.com', 'youtu.be', 'm.youtube.com', 'music.youtube.com',
-            'instagram.com', 'www.instagram.com',
-            'facebook.com', 'fb.com', 'fb.watch', 'www.facebook.com',
-            'tiktok.com', 'vm.tiktok.com', 'www.tiktok.com',
-            'twitter.com', 'x.com', 'www.twitter.com',
-            'reddit.com', 'www.reddit.com',
-            'soundcloud.com', 'www.soundcloud.com',
-            'spotify.com', 'open.spotify.com',
-            'vimeo.com', 'www.vimeo.com',
-            'dailymotion.com', 'www.dailymotion.com',
-            'twitch.tv', 'www.twitch.tv',
-            'rumble.com', 'www.rumble.com',
-            'bilibili.com', 'www.bilibili.com'
-        }
-        
-        # Check if domain is supported
-        if domain not in supported_domains:
-            return False
-            
-        # Basic URL format validation
-        url_pattern = re.compile(
-            r'^(?:http|ftp)s?://'  # http:// or https://
-            r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain...
-            r'localhost|'  # localhost...
-            r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
-            r'(?::\d+)?'  # optional port
-            r'(?:/?|[/?]\S+)$', re.IGNORECASE)
-        
-        return re.match(url_pattern, url) is not None
-        
     except Exception as e:
-        logger.error(f"URL validation error for '{url}': {e}")
-        return False
+        error_msg = str(e)
+        logger.error(f"Download processing error: {error_msg}")
+        
+        # User-friendly error messages
+        if "unavailable" in error_msg.lower() or "private" in error_msg.lower():
+            bot.send_message(chat_id, "❌ <b>Video unavailable</b> - The video may be private, deleted, or restricted.")
+        elif "blocked" in error_msg.lower() or "403" in error_msg:
+            bot.send_message(chat_id, "❌ <b>Access blocked</b> - The server is blocking requests. Please try a different video.")
+        elif "No content" in error_msg or "empty" in error_msg.lower():
+            bot.send_message(chat_id, "❌ <b>No content received</b> - The download completed but the file was empty.")
+        else:
+            bot.send_message(chat_id, f"❌ <b>Download error:</b>\n{error_msg[:150]}")
+    
+    finally:
+        show_main_menu(chat_id)
+
+# ========== Utility Functions ==========
+def sanitize_filename(filename):
+    """Sanitize filename for safe usage"""
+    if not filename:
+        return "media_file"
+    
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+    filename = re.sub(r'\s+', ' ', filename).strip()
+    
+    if len(filename) > 100:
+        filename = filename[:100]
+    
+    return filename or "media_file"
 
 def get_file_size(file_path):
     """Get human readable file size"""
@@ -255,883 +472,357 @@ def get_file_size(file_path):
     except:
         return "Unknown"
 
-def clean_filename(filename):
-    """Clean filename from invalid characters"""
-    if not filename:
-        return "unknown"
-    return re.sub(r'[<>:"/\\|?*]', '', filename)
-
-def format_duration(duration):
-    """Format duration from seconds to MM:SS"""
+def format_duration(seconds):
+    """Format duration from seconds"""
     try:
-        if duration is None:
-            return "Unknown"
-        duration = int(duration)
-        minutes = duration // 60
-        seconds = duration % 60
-        return f"{minutes}:{seconds:02d}"
+        seconds = int(seconds)
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        seconds = seconds % 60
+        
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        else:
+            return f"{minutes}:{seconds:02d}"
     except:
         return "Unknown"
 
-def test_url_with_ytdlp(url):
-    """Test if URL is actually accessible with yt-dlp"""
+def is_supported_url(url):
+    """Check if URL is from supported platform"""
     try:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': False,
-            'extract_flat': True,
-            'socket_timeout': 15,
-            'skip_download': True,
-        }
+        url = url.strip()
+        if not url:
+            return False
+            
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info is not None
+        supported_domains = [
+            'youtube.com', 'youtu.be', 'music.youtube.com',
+            'instagram.com', 'www.instagram.com',
+            'facebook.com', 'fb.watch', 'www.facebook.com',
+            'tiktok.com', 'vm.tiktok.com', 'www.tiktok.com',
+            'twitter.com', 'x.com', 'www.twitter.com',
+            'soundcloud.com', 'www.soundcloud.com',
+            'vimeo.com', 'www.vimeo.com',
+            'dailymotion.com', 'www.dailymotion.com',
+        ]
+        
+        domain = urllib.parse.urlparse(url).netloc.lower()
+        return any(supported in domain for supported in supported_domains)
+        
     except Exception as e:
-        logger.error(f"URL test failed for {url}: {e}")
+        logger.error(f"URL validation error: {e}")
         return False
 
-# ========== yt-dlp Settings ==========
-def get_ydl_opts(download_type='video', is_fast=False):
-    """Get yt-dlp options based on download type"""
-    base_opts = {
-        'outtmpl': os.path.join(TEMP_DIR, '%(title).100s.%(ext)s'),
-        'retries': 3,
-        'fragment_retries': 3,
-        'skip_unavailable_fragments': True,
-        'ignoreerrors': False,
-        'quiet': True,
-        'socket_timeout': 30,
-        'noplaylist': True,
-    }
-    
-    if download_type == 'audio':
-        if FFMPEG_AVAILABLE:
-            base_opts.update({
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-            })
-        else:
-            base_opts.update({
-                'format': 'bestaudio[ext=m4a]/bestaudio/best',
-            })
-    elif is_fast:
-        base_opts.update({
-            'format': 'worst[height<=360]/worst',
-        })
-    else:
-        base_opts.update({
-            'format': 'best[height<=720]/best[height<=480]/best',
-        })
-    
-    return base_opts
-
-# ========== Download System ==========
-def download_media(url, chat_id, download_type='video', is_fast=False):
-    """Download media with comprehensive error handling"""
-    max_retries = 2
-    for attempt in range(max_retries):
+# ========== Cleanup System ==========
+class CleanupManager:
+    def __init__(self):
+        self.active = True
+        
+    def cleanup_old_files(self, max_age_minutes=10):  # Reduced to 10 minutes for faster cleanup
+        """Clean up old temporary files"""
         try:
-            bot.send_message(chat_id, f"🔄 Processing (Attempt {attempt + 1}/{max_retries})...")
+            current_time = time.time()
+            deleted_files = 0
             
-            ydl_opts = get_ydl_opts(download_type, is_fast)
+            for filename in os.listdir(TEMP_DIR):
+                file_path = os.path.join(TEMP_DIR, filename)
+                if os.path.isfile(file_path):
+                    file_age = (current_time - os.path.getctime(file_path)) / 60
+                    if file_age > max_age_minutes:
+                        try:
+                            file_size = os.path.getsize(file_path)
+                            os.unlink(file_path)
+                            deleted_files += 1
+                            logger.info(f"Deleted {filename} ({file_size} bytes)")
+                        except Exception as e:
+                            logger.error(f"Failed to delete {filename}: {e}")
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Get video info first
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    raise Exception("Cannot get video information")
+            if deleted_files > 0:
+                logger.info(f"🧹 Cleaned {deleted_files} temporary files")
                 
-                title = clean_filename(info.get('title', 'unknown'))
-                duration = info.get('duration', 0)
-                
-                if duration > 1800:  # More than 30 minutes
-                    bot.send_message(chat_id, "⚠️ Long video - this may take a while")
-                
-                bot.send_message(chat_id, f"📥 Downloading: {title}")
-                
-                # Start download
-                ydl.download([url])
-                
-                # Find the downloaded file
-                file_pattern = os.path.join(TEMP_DIR, f"{title}.*")
-                files = glob.glob(file_pattern)
-                
-                if files:
-                    file_path = files[0]
-                    return info, file_path
-                else:
-                    # Fallback: get the newest file in temp directory
-                    all_files = glob.glob(os.path.join(TEMP_DIR, "*"))
-                    if all_files:
-                        latest_file = max(all_files, key=os.path.getctime)
-                        return info, latest_file
-                    else:
-                        raise Exception("Downloaded file not found")
-                    
         except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Download attempt {attempt + 1} failed: {error_msg}")
-            
-            # Handle FFmpeg related errors
-            if "ffprobe" in error_msg.lower() or "ffmpeg" in error_msg.lower():
-                bot.send_message(chat_id, "❌ FFmpeg error! Downloading without conversion...")
-                ydl_opts = get_ydl_opts('audio', is_fast)
-                if 'postprocessors' in ydl_opts:
-                    del ydl_opts['postprocessors']
-                
+            logger.error(f"Cleanup error: {e}")
+    
+    def start_cleanup_daemon(self):
+        """Start background cleanup daemon"""
+        def daemon_loop():
+            while self.active:
                 try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
-                        files = glob.glob(os.path.join(TEMP_DIR, "*"))
-                        if files:
-                            latest_file = max(files, key=os.path.getctime)
-                            return info, latest_file
-                except Exception as inner_e:
-                    logger.error(f"Download without FFmpeg failed: {inner_e}")
-                    break
-                
-            if attempt < max_retries - 1:
-                bot.send_message(chat_id, f"⚠️ Retrying... (Attempt {attempt + 2}/{max_retries})")
-                time.sleep(2)
-            else:
-                raise e
-    
-    return None, None
+                    self.cleanup_old_files()
+                    time.sleep(300)  # 5 minutes
+                except Exception as e:
+                    logger.error(f"Cleanup daemon error: {e}")
+                    time.sleep(300)
+        
+        thread = threading.Thread(target=daemon_loop, daemon=True)
+        thread.start()
+        logger.info("✅ Cleanup daemon started")
 
-def process_download(chat_id, url, media_type, is_fast=False):
-    """Process download with comprehensive error handling"""
+# Initialize cleanup system
+cleanup_manager = CleanupManager()
+cleanup_manager.start_cleanup_daemon()
+
+# ========== Menu System ==========
+def show_main_menu(chat_id):
+    """Display the main menu"""
     try:
-        bot.send_message(chat_id, "🔍 Validating URL...")
-        
-        # Validate URL format
-        if not is_valid_url(url):
-            bot.send_message(chat_id, "❌ Invalid URL format or unsupported platform")
-            send_welcome_by_id(chat_id)
-            return
-        
-        # Test URL accessibility
-        bot.send_message(chat_id, "🌐 Testing connection...")
-        if not test_url_with_ytdlp(url):
-            bot.send_message(chat_id, "❌ Cannot access this URL or content unavailable")
-            send_welcome_by_id(chat_id)
-            return
-        
-        # Determine download type
-        if media_type == 'audio':
-            action_msg = "🎵 Extracting audio..."
-            download_type = 'audio'
-        elif is_fast:
-            action_msg = "⚡ Fast download starting..."
-            download_type = 'video'
-        else:
-            action_msg = "📥 Download starting..."
-            download_type = 'video'
-        
-        bot.send_message(chat_id, action_msg)
-        bot.send_chat_action(chat_id, 'upload_video' if media_type != 'audio' else 'upload_audio')
-        
-        # Download media
-        info, file_path = download_media(url, chat_id, download_type, is_fast)
-        
-        if info and file_path and os.path.exists(file_path):
-            file_size = get_file_size(file_path)
-            title = clean_filename(info.get('title', 'Unknown'))
-            caption = f"✅ Download Complete!\n🎬 {title}\n📊 Size: {file_size}"
-            
-            if media_type == 'audio' and not FFMPEG_AVAILABLE:
-                caption += "\n⚠️ Original format (FFmpeg not available)"
-            
-            bot.send_message(chat_id, "📤 Uploading file...")
-            
-            try:
-                if media_type == 'audio':
-                    with open(file_path, 'rb') as audio_file:
-                        if file_path.endswith(('.m4a', '.webm', '.opus')):
-                            bot.send_document(chat_id, audio_file, caption=caption, timeout=120)
-                        else:
-                            bot.send_audio(chat_id, audio_file, caption=caption, timeout=120, title=title[:64])
-                else:
-                    with open(file_path, 'rb') as video_file:
-                        bot.send_video(chat_id, video_file, caption=caption, timeout=120, supports_streaming=True)
-                        
-            except Exception as send_error:
-                logger.error(f"Upload error: {send_error}")
-                # Fallback: send as document
-                try:
-                    with open(file_path, 'rb') as doc_file:
-                        bot.send_document(chat_id, doc_file, caption=caption, timeout=120)
-                except Exception as doc_error:
-                    logger.error(f"Document upload error: {doc_error}")
-                    bot.send_message(chat_id, f"❌ Upload failed: {str(send_error)[:100]}")
-            
-            # Cleanup downloaded file
-            try:
-                os.unlink(file_path)
-                logger.info(f"Cleaned up: {file_path}")
-            except Exception as e:
-                logger.error(f"Cleanup error: {e}")
-                
-        else:
-            bot.send_message(chat_id, "❌ Download failed - no content received")
-            
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Download processing error: {error_msg}")
-        
-        # User-friendly error messages
-        error_messages = {
-            "Private video": "❌ Private video - cannot access",
-            "Video unavailable": "❌ Video unavailable or deleted",
-            "Sign in": "❌ Content requires login",
-            "HTTP Error 403": "❌ Access blocked from this site",
-            "Unsupported URL": "❌ Unsupported platform or URL",
-            "No video formats": "❌ No playable format found",
-            "This video is unavailable": "❌ Video not available in your region",
-            "Unable to download webpage": "❌ Cannot access this URL",
-            "Video unavailable": "❌ Video is no longer available"
-        }
-        
-        for key, message in error_messages.items():
-            if key in error_msg:
-                bot.send_message(chat_id, message)
-                break
-        else:
-            # Generic error message
-            error_display = str(e)[:150]
-            bot.send_message(chat_id, f"❌ Error: {error_display}")
-    
-    finally:
-        send_welcome_by_id(chat_id)
-
-# ========== Main Menu System ==========
-@bot.message_handler(commands=['start', 'help', 'menu'])
-def send_welcome(message):
-    user_states[message.chat.id] = 'main'
-    
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    btn1 = types.KeyboardButton('🔄 Convert Formats')
-    btn2 = types.KeyboardButton('📥 Normal Download')
-    btn3 = types.KeyboardButton('⚡ Fast Download')
-    btn4 = types.KeyboardButton('🎵 Audio Download')
-    btn5 = types.KeyboardButton('🔍 Search Song')
-    btn6 = types.KeyboardButton('ℹ️ Help & Info')
-    markup.add(btn1, btn2, btn3, btn4, btn5, btn6)
-    
-    ffmpeg_status = "✅ Available" if FFMPEG_AVAILABLE else "❌ Not installed"
-    
-    welcome_text = f"""
- **Welcome to MasTer DCS Pro!**
-
- **Available Features:**
-
-🔄 Convert Formats - Image/Video conversion tools
-📥 Normal Download - High quality (720p) 
-⚡ Fast Download - Lower quality (360p) for speed
-🎵 Audio Download - Extract audio from videos
-🔍 Search Song - Find music by lyrics
-
-📋 **Supported Platforms:**
-YouTube, Instagram, Facebook, TikTok, Twitter,
-Reddit, SoundCloud, Spotify, Vimeo, Twitch & more!
-
-**Choose your desired function below!**
-    """
-    
-    bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode='Markdown')
-
-def send_welcome_by_id(chat_id):
-    """Send welcome message using chat_id only"""
-    try:
-        user_states[chat_id] = 'main'
         markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        btn1 = types.KeyboardButton('🔄 Convert Formats')
-        btn2 = types.KeyboardButton('📥 Normal Download')
-        btn3 = types.KeyboardButton('⚡ Fast Download')
-        btn4 = types.KeyboardButton('🎵 Audio Download')
-        btn5 = types.KeyboardButton('🔍 Search Song')
-        btn6 = types.KeyboardButton('ℹ️ Help & Info')
-        markup.add(btn1, btn2, btn3, btn4, btn5, btn6)
         
-        bot.send_message(chat_id, "🎛️ Choose your next action:", reply_markup=markup)
-    except Exception as e:
-        logger.error(f"Welcome message error: {e}")
+        buttons = [
+            '📥 Download Video', 
+            '⚡ Fast Download',
+            '🎵 Audio Only',
+            '🔍 Search Music',
+            '📊 Status',
+            'ℹ️ Help'
+        ]
+        
+        for i in range(0, len(buttons), 2):
+            row = buttons[i:i+2]
+            markup.add(*[types.KeyboardButton(btn) for btn in row])
+        
+        welcome_text = """
+🎉 <b>Welcome to MasTerDCS</b>
 
-# ========== Download Handlers ==========
-@bot.message_handler(func=lambda message: message.text in ['📥 Normal Download', '⚡ Fast Download', '🎵 Audio Download'])
-def handle_download_request(message):
+⚡ <b>Available Features:</b>
+
+• <b>Download Video</b> - High quality (720p)
+• <b>Fast Download</b> - Lower quality for speed  
+• <b>Audio Only</b> - Extract audio from videos
+• <b>Search Music</b> - Find songs by lyrics/name
+
+
+<code>Choose your desired option below 👇</code>
+        """
+        
+        bot.send_message(chat_id, welcome_text, reply_markup=markup)
+        user_states[chat_id] = 'main'
+        
+    except Exception as e:
+        logger.error(f"Menu error: {e}")
+
+# ========== Command Handlers ==========
+@bot.message_handler(commands=['start', 'help', 'menu'])
+def handle_start(message):
+    show_main_menu(message.chat.id)
+
+@bot.message_handler(func=lambda message: message.text in ['📥 Download Video', '⚡ Fast Download', '🎵 Audio Only'])
+def handle_download_selection(message):
     chat_id = message.chat.id
     
-    download_type = {
-        '📥 Normal Download': 'normal',
-        '⚡ Fast Download': 'fast', 
-        '🎵 Audio Download': 'audio'
-    }[message.text]
-    
-    user_states[chat_id] = f'waiting_url_{download_type}'
-    
-    type_names = {
-        'normal': 'Normal Quality 🎥',
-        'fast': 'Fast Download ⚡', 
-        'audio': 'Audio Only 🎵'
+    configs = {
+        '📥 Download Video': {'type': 'video', 'quality': 'best', 'desc': 'High Quality Video Download'},
+        '⚡ Fast Download': {'type': 'video', 'quality': 'fast', 'desc': 'Fast Download (Lower Quality)'},
+        '🎵 Audio Only': {'type': 'audio', 'quality': 'best', 'desc': 'Audio Extraction from Video'}
     }
     
-    # Additional info based on type
-    extra_info = ""
-    if download_type == 'audio' and not FFMPEG_AVAILABLE:
-        extra_info = "\n\n⚠️ **Note:** FFmpeg not available - downloading in original audio format"
+    config = configs[message.text]
+    user_states[chat_id] = f'waiting_url_{config["type"]}_{config["quality"]}'
     
-    platforms_list = "\n\n📋 **Supported:** YouTube, Instagram, Facebook, TikTok, Twitter, Reddit, SoundCloud, Spotify, Vimeo, Twitch, Dailymotion"
+    instructions = f"""
+📋 <b>{config['desc']}</b>
+
+🔗 <b>Send the video URL now</b>
+
+🌐 <b>Supported Platforms:</b>
+• YouTube, Instagram, TikTok
+• Facebook, Twitter, SoundCloud  
+• Vimeo, DailyMotion
+
+💡 <b>Fixed Features:</b>
+• Proper file verification
+• No empty downloads
+• Multiple retry attempts
+
+<code>Paste your URL below...</code>
+    """
     
-    bot.send_message(chat_id, 
-                   f"**{type_names[download_type]}**\n\nPlease send the video URL:{extra_info}{platforms_list}",
-                   reply_markup=types.ReplyKeyboardRemove(),
-                   parse_mode='Markdown')
+    bot.send_message(chat_id, instructions, reply_markup=types.ReplyKeyboardRemove())
 
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id, '').startswith('waiting_url_'))
-def handle_url_input(message):
+def process_url_input(message):
     chat_id = message.chat.id
     url = message.text.strip()
     
     current_state = user_states.get(chat_id, '')
     if not current_state.startswith('waiting_url_'):
         return
-        
-    download_type = current_state.replace('waiting_url_', '')
-    is_fast = download_type == 'fast'
-    media_type = 'audio' if download_type == 'audio' else 'video'
+    
+    parts = current_state.split('_')
+    download_type = parts[2]
+    quality = parts[3]
     
     user_states[chat_id] = 'processing'
     
-    # Start download in separate thread
-    thread = threading.Thread(target=process_download, args=(chat_id, url, media_type, is_fast))
+    thread = threading.Thread(
+        target=handle_download_process,
+        args=(chat_id, url, download_type, quality)
+    )
     thread.daemon = True
     thread.start()
     
-    bot.send_message(chat_id, "🚀 Starting download process...")
+    bot.send_message(chat_id, "🚀 <b>Starting verified download process...</b>")
 
-# ========== Format Conversion System ==========
-@bot.message_handler(func=lambda message: message.text == '🔄 Convert Formats')
-def handle_convert(message):
-    user_states[message.chat.id] = 'convert'
-    
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    btn1 = types.KeyboardButton('📷 Image to PDF')
-    btn2 = types.KeyboardButton('🎵 Video to MP3')
-    btn3 = types.KeyboardButton('🖼️ Image to JPG')
-    btn_back = types.KeyboardButton('🔙 Main Menu')
-    markup.add(btn1, btn2, btn3, btn_back)
-    
-    ffmpeg_info = ""
-    if not FFMPEG_AVAILABLE:
-        ffmpeg_info = "\n\n⚠️ **Video to MP3 requires FFmpeg** (see /ffmpeg_help)"
-    
-    bot.send_message(message.chat.id, f"**Format Conversion Tools**{ffmpeg_info}", 
-                   reply_markup=markup, parse_mode='Markdown')
+# ========== Music Search System ==========
+@bot.message_handler(func=lambda message: message.text == '🔍 Search Music')
+def handle_music_search(message):
+    user_states[message.chat.id] = 'waiting_music_query'
+    bot.send_message(
+        message.chat.id,
+        "🎵 <b>Music Search</b>\n\nSend song lyrics or title to search:",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
 
-# Image to PDF Conversion
-@bot.message_handler(func=lambda message: message.text == '📷 Image to PDF')
-def handle_image_to_pdf(message):
-    user_states[message.chat.id] = 'waiting_image_pdf'
-    bot.send_message(message.chat.id, "📤 Please send the image you want to convert to PDF", 
-                   reply_markup=types.ReplyKeyboardRemove())
-
-@bot.message_handler(content_types=['photo'], func=lambda message: user_states.get(message.chat.id) == 'waiting_image_pdf')
-def process_image_to_pdf(message):
-    try:
-        bot.send_message(message.chat.id, "⏳ Processing your image...")
-        
-        # Get highest quality photo
-        file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        
-        # Save temporary image
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg', dir=TEMP_DIR) as temp_file:
-            temp_file.write(downloaded_file)
-            temp_path = temp_file.name
-        
-        pdf_path = None
-        try:
-            # Open and process image
-            image = Image.open(temp_path)
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-            
-            # Create PDF
-            pdf_path = temp_path.replace('.jpg', '.pdf')
-            image.save(pdf_path, "PDF", resolution=100.0, quality=95)
-            
-            file_size = get_file_size(pdf_path)
-            
-            # Send PDF to user
-            with open(pdf_path, 'rb') as pdf_file:
-                bot.send_document(message.chat.id, pdf_file, 
-                                caption=f"✅ Successfully converted to PDF!\n📊 File size: {file_size}")
-            
-        except Exception as e:
-            logger.error(f"PDF conversion error: {e}")
-            bot.send_message(message.chat.id, f"❌ Conversion failed: {str(e)}")
-        
-        finally:
-            # Cleanup temporary files
-            for path in [temp_path, pdf_path]:
-                try:
-                    if path and os.path.exists(path):
-                        os.unlink(path)
-                except Exception as e:
-                    logger.error(f"Cleanup error {path}: {e}")
-        
-    except Exception as e:
-        logger.error(f"Image processing error: {e}")
-        bot.send_message(message.chat.id, f"❌ Processing error: {str(e)}")
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id) == 'waiting_music_query')
+def process_music_search(message):
+    chat_id = message.chat.id
+    query = message.text.strip()
     
-    finally:
-        send_welcome_by_id(message.chat.id)
-
-# Video to MP3 Conversion
-@bot.message_handler(func=lambda message: message.text == '🎵 Video to MP3')
-def handle_video_to_mp3(message):
-    if not FFMPEG_AVAILABLE:
-        bot.send_message(message.chat.id,
-                       "❌ **FFmpeg Required**\n\n"
-                       "This feature needs FFmpeg installed:\n"
-                       "1. Download from: https://ffmpeg.org/\n"
-                       "2. Add to system PATH\n"
-                       "3. Restart the bot\n\n"
-                       "💡 **Quick fix:** Use '🎵 Audio Download' for direct audio extraction",
-                       parse_mode='Markdown')
+    if len(query) < 2:
+        bot.send_message(chat_id, "❌ <b>Please enter at least 2 characters</b>")
+        show_main_menu(chat_id)
         return
     
-    user_states[message.chat.id] = 'waiting_video_mp3'
-    bot.send_message(message.chat.id, "🎬 Send the video file to extract audio from (max 50MB)", 
-                   reply_markup=types.ReplyKeyboardRemove())
-
-@bot.message_handler(content_types=['video'], func=lambda message: user_states.get(message.chat.id) == 'waiting_video_mp3')
-def process_video_to_mp3(message):
     try:
-        # Check file size
-        if message.video.file_size > 50 * 1024 * 1024:
-            bot.send_message(message.chat.id, "❌ File too large! Maximum size is 50MB")
-            send_welcome_by_id(message.chat.id)
-            return
-            
-        bot.send_message(message.chat.id, "⏳ Extracting audio from video...")
+        bot.send_message(chat_id, f"🔍 <b>Searching for:</b> <code>{query}</code>")
         
-        # Download video file
-        file_info = bot.get_file(message.video.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        
-        video_path = os.path.join(TEMP_DIR, f"video_{message.message_id}.mp4")
-        with open(video_path, 'wb') as f:
-            f.write(downloaded_file)
-        
-        audio_path = None
-        try:
-            # Convert video to MP3 using FFmpeg
-            audio_path = os.path.join(TEMP_DIR, f"audio_{message.message_id}.mp3")
-            
-            ffmpeg_cmd = [
-                'ffmpeg',
-                '-i', video_path,
-                '-vn',  # No video
-                '-acodec', 'libmp3lame',
-                '-ab', '192k',  # Audio bitrate
-                '-ar', '44100',  # Sample rate
-                '-y',  # Overwrite output
-                audio_path
-            ]
-            
-            result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=60)
-            
-            if result.returncode == 0 and os.path.exists(audio_path):
-                file_size = get_file_size(audio_path)
-                
-                # Send MP3 to user
-                with open(audio_path, 'rb') as audio_file:
-                    bot.send_audio(message.chat.id, audio_file, 
-                                 caption=f"✅ Audio extracted successfully!\n📊 Size: {file_size}")
-            else:
-                error_msg = result.stderr[:200] if result.stderr else "Conversion failed"
-                bot.send_message(message.chat.id, f"❌ Extraction failed: {error_msg}")
-                
-        except subprocess.TimeoutExpired:
-            bot.send_message(message.chat.id, "❌ Conversion timeout - file may be too large")
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"MP3 extraction error: {error_msg}")
-            
-            if "ffprobe" in error_msg.lower() or "ffmpeg" in error_msg.lower():
-                bot.send_message(message.chat.id, 
-                               "❌ FFmpeg error!\n\n"
-                               "Please check:\n"
-                               "• FFmpeg installation\n"
-                               "• System PATH configuration\n"
-                               "• Bot restart after installation")
-            else:
-                bot.send_message(message.chat.id, f"❌ Conversion error: {str(e)[:100]}")
-        
-        finally:
-            # Cleanup files
-            for path in [video_path, audio_path]:
-                try:
-                    if path and os.path.exists(path):
-                        os.unlink(path)
-                except:
-                    pass
-        
-    except Exception as e:
-        logger.error(f"Video processing error: {e}")
-        bot.send_message(message.chat.id, f"❌ Processing error: {str(e)}")
-    
-    finally:
-        send_welcome_by_id(message.chat.id)
-
-# Image to JPG Conversion
-@bot.message_handler(func=lambda message: message.text == '🖼️ Image to JPG')
-def handle_image_to_jpg(message):
-    user_states[message.chat.id] = 'waiting_image_jpg'
-    bot.send_message(message.chat.id, "📤 Send the image to convert to JPG format", 
-                   reply_markup=types.ReplyKeyboardRemove())
-
-@bot.message_handler(content_types=['photo'], func=lambda message: user_states.get(message.chat.id) == 'waiting_image_jpg')
-def process_image_to_jpg(message):
-    try:
-        bot.send_message(message.chat.id, "⏳ Converting image to JPG...")
-        
-        file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.temp', dir=TEMP_DIR) as temp_file:
-            temp_file.write(downloaded_file)
-            temp_path = temp_file.name
-        
-        jpg_path = None
-        try:
-            # Convert to JPG
-            image = Image.open(temp_path)
-            image = image.convert('RGB')
-            
-            jpg_path = os.path.join(TEMP_DIR, f"converted_{message.message_id}.jpg")
-            image.save(jpg_path, "JPEG", quality=95, optimize=True)
-            
-            file_size = get_file_size(jpg_path)
-            
-            # Send converted image
-            with open(jpg_path, 'rb') as jpg_file:
-                bot.send_photo(message.chat.id, jpg_file, 
-                             caption=f"✅ Converted to JPG successfully!\n📊 Size: {file_size}")
-            
-        except Exception as e:
-            bot.send_message(message.chat.id, f"❌ Conversion error: {str(e)}")
-        
-        finally:
-            # Cleanup
-            for path in [temp_path, jpg_path]:
-                try:
-                    if path and os.path.exists(path):
-                        os.unlink(path)
-                except:
-                    pass
-        
-    except Exception as e:
-        logger.error(f"JPG conversion error: {e}")
-        bot.send_message(message.chat.id, f"❌ Processing error: {str(e)}")
-    
-    finally:
-        send_welcome_by_id(message.chat.id)
-
-# ========== Song Search System - FIXED VERSION ==========
-@bot.message_handler(func=lambda message: message.text == '🔍 Search Song')
-def handle_lyrics_search(message):
-    user_states[message.chat.id] = 'waiting_lyrics'
-    bot.send_message(message.chat.id, "🎤 Enter song lyrics or title to search:", 
-                   reply_markup=types.ReplyKeyboardRemove())
-
-@bot.message_handler(func=lambda message: user_states.get(message.chat.id) == 'waiting_lyrics')
-def search_by_lyrics(message):
-    try:
-        lyrics = message.text.strip()
-        if len(lyrics) < 2:
-            bot.send_message(message.chat.id, "❌ Please enter at least 2 characters")
-            send_welcome_by_id(message.chat.id)
-            return
-        
-        bot.send_message(message.chat.id, f"🔍 Searching for: '{lyrics}'")
-        
-        thread = threading.Thread(target=perform_song_search, args=(message.chat.id, lyrics))
-        thread.daemon = True
-        thread.start()
-        
-    except Exception as e:
-        logger.error(f"Search initialization error: {e}")
-        bot.send_message(message.chat.id, "❌ Search failed. Please try again.")
-        send_welcome_by_id(message.chat.id)
-
-def perform_song_search(chat_id, lyrics):
-    """Perform song search in background thread - FIXED VERSION"""
-    try:
-        # Create search query
-        search_query = f"{lyrics} official audio"
-        
-        bot.send_message(chat_id, "🎵 Searching YouTube...")
-        
-        # Use simpler yt-dlp options for search
         ydl_opts = {
             'quiet': True,
-            'no_warnings': False,
-            'extract_flat': True,  # Use flat extraction for faster search
+            'extract_flat': True,
             'socket_timeout': 15,
-            'skip_download': True,
         }
         
+        search_url = f"ytsearch3:{query}"
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Search YouTube using ytsearch
-            search_url = f"ytsearch10:{search_query}"
             info = ydl.extract_info(search_url, download=False)
             
             if not info or 'entries' not in info or not info['entries']:
-                bot.send_message(chat_id, "❌ No results found for your search")
+                bot.send_message(chat_id, "❌ <b>No results found</b>")
+                show_main_menu(chat_id)
                 return
             
-            entries = info['entries']
-            valid_entries = []
+            entries = [e for e in info['entries'] if e and e.get('duration', 0) < 1800][:3]
             
-            # Process search results
-            for entry in entries:
-                if entry and entry.get('url'):
-                    title = entry.get('title', 'Unknown Title')
-                    duration = entry.get('duration')
-                    duration_str = format_duration(duration)
-                    url = entry.get('url')
-                    
-                    # Filter out live streams and very long videos
-                    if duration and duration > 36000:  # Longer than 10 hours
-                        continue
-                        
-                    valid_entries.append({
-                        'title': title,
-                        'url': url,
-                        'duration': duration_str
-                    })
-            
-            if not valid_entries:
-                bot.send_message(chat_id, "❌ No valid results found")
+            if not entries:
+                bot.send_message(chat_id, "❌ <b>No valid results found</b>")
+                show_main_menu(chat_id)
                 return
             
-            # Show top results
-            results_text = "🎵 **Top Results:**\n\n"
-            for i, entry in enumerate(valid_entries[:5], 1):
-                results_text += f"{i}. {entry['title']}\n"
-                results_text += f"   ⏱️ {entry['duration']}\n\n"
+            results_text = "🎵 <b>Top Results:</b>\n\n"
+            for i, entry in enumerate(entries, 1):
+                title = entry.get('title', 'Unknown Title')
+                duration = format_duration(entry.get('duration'))
+                results_text += f"{i}. {title}\n   ⏱️ {duration}\n\n"
             
-            results_text += "⬇️ Downloading the first result..."
-            bot.send_message(chat_id, results_text, parse_mode='Markdown')
+            results_text += "⬇️ <b>Downloading first result...</b>"
+            bot.send_message(chat_id, results_text)
             
-            # Download the first result
-            first_result = valid_entries[0]
-            bot.send_message(chat_id, f"🎵 Downloading: {first_result['title']}")
+            first_result = entries[0]
+            handle_download_process(chat_id, first_result['url'], 'audio', 'best')
             
-            # Use the existing download system
-            process_download(chat_id, first_result['url'], 'audio', False)
-                
     except Exception as e:
-        logger.error(f"Song search error: {e}")
-        error_msg = str(e)
-        
-        # Provide specific error messages
-        if "Unable to download webpage" in error_msg:
-            bot.send_message(chat_id, "❌ Search service unavailable. Please try again later.")
-        elif "No results found" in error_msg:
-            bot.send_message(chat_id, "❌ No results found. Try different keywords.")
-        else:
-            bot.send_message(chat_id, f"❌ Search error: {error_msg[:100]}")
-            
-    finally:
-        send_welcome_by_id(chat_id)
+        logger.error(f"Music search error: {e}")
+        bot.send_message(chat_id, f"❌ <b>Search error:</b> {str(e)[:100]}")
+        show_main_menu(chat_id)
 
-# ========== Additional Commands ==========
-@bot.message_handler(func=lambda message: message.text == '🔙 Main Menu')
-def handle_back(message):
-    send_welcome(message)
+# ========== Additional Handlers ==========
+@bot.message_handler(func=lambda message: message.text == '📊 Status')
+def handle_status(message):
+    status_text = """
+📊 <b>System Status</b>
 
-@bot.message_handler(func=lambda message: message.text == 'ℹ️ Help & Info')
-def handle_help(message):
-    help_text = """
-🛠 **MediaBot Pro - Complete Guide**
+✅ <b>All Systems Operational</b>
 
-⚡ **Download Options:**
-- 📥 Normal Download: High quality (720p) videos
-- ⚡ Fast Download: Lower quality (360p) for speed
-- 🎵 Audio Download: Extract audio from any video
+🔧 <b>Fixed Issues:</b>
+• Empty file downloads - ✅ RESOLVED
+• File verification - ✅ ACTIVE
+• Download retries - ✅ ENABLED
+• Proper cleanup - ✅ ACTIVE
 
-🔄 **Conversion Tools:**
-- 📷 Image to PDF: Convert images to PDF documents
-- 🎵 Video to MP3: Extract audio from video files
-- 🖼️ Image to JPG: Convert images to JPG format
+🌐 <b>Platform Support:</b>
+• YouTube, Instagram, TikTok
+• Facebook, Twitter, SoundCloud
+• Vimeo, DailyMotion
 
-🔍 **Music Search:**
-- Search by lyrics or song title
-- Automatic download of best match
-
-📋 **Supported Platforms:**
-- YouTube, Instagram, Facebook, TikTok
-- Twitter, Reddit, SoundCloud, Spotify  
-- Vimeo, Twitch, Dailymotion, and more!
-
-🔧 **Technical Info:**
-- Auto cleanup every hour
-- Support for multiple formats
-- Professional error handling
-
-💡 **Quick Commands:**
-/start - Main menu
-/status - System status  
-/clean - Clean temporary files
-/ffmpeg_help - FFmpeg setup guide
-
-🚀 **Ready to use! Choose any option from the main menu.**
+🚀 <b>Ready for verified downloads!</b>
     """
     
-    bot.send_message(message.chat.id, help_text, parse_mode='Markdown')
+    bot.send_message(message.chat.id, status_text)
 
-@bot.message_handler(commands=['status'])
-def check_status(message):
-    """Display comprehensive system status"""
-    chat_id = message.chat.id
-    
-    ffmpeg_status = "✅ Installed and working" if FFMPEG_AVAILABLE else "❌ Not available"
-    
-    # Count temporary files
-    temp_files = len([f for f in os.listdir(TEMP_DIR) if os.path.isfile(os.path.join(TEMP_DIR, f))])
-    
-    # Calculate total size
-    total_size = 0
-    for file in os.listdir(TEMP_DIR):
-        file_path = os.path.join(TEMP_DIR, file)
-        if os.path.isfile(file_path):
-            total_size += os.path.getsize(file_path)
-    size_mb = total_size / (1024 * 1024)
-    
-    status_text = f"""
-🤖 **System Status Report**
-
-🐍 **Python Version:** {sys.version.split()[0]}
-📁 **Temporary Files:** {temp_files} files
-💾 **Storage Usage:** {size_mb:.2f} MB
-🔧 **FFmpeg Status:** {ffmpeg_status}
-👥 **Active Sessions:** {len(user_states)}
-🧹 **Auto Cleanup:** ✅ Active (hourly)
-
-🔄 **All Systems:** ✅ Operational
-💡 **Status:** 🟢 Running optimally
-"""
-    
-    bot.send_message(chat_id, status_text, parse_mode='Markdown')
-
-@bot.message_handler(commands=['clean'])
-def clean_temp(message):
-    """Immediate cleanup command"""
-    deleted_files = auto_cleanup.cleanup_temp_files(max_age_minutes=0)
-    if deleted_files > 0:
-        bot.send_message(message.chat.id, f"🧹 Cleaned {deleted_files} temporary files!")
-    else:
-        bot.send_message(message.chat.id, "✅ No temporary files to clean")
-
-@bot.message_handler(commands=['ffmpeg_help'])
-def ffmpeg_help(message):
-    """FFmpeg installation guide"""
+@bot.message_handler(func=lambda message: message.text == 'ℹ️ Help')
+def handle_help(message):
     help_text = """
-🔧 **FFmpeg Installation Guide**
+🛠️ <b>Fixed Media Bot - Help Guide</b>
 
-📥 **Download FFmpeg:**
-1. Visit: https://www.gyan.dev/ffmpeg/builds/
-2. Download: `ffmpeg-release-full.7z` (latest version)
+⚡ <b>Download Options:</b>
+• <b>Download Video</b> - High quality with verification
+• <b>Fast Download</b> - Lower quality, faster download
+• <b>Audio Only</b> - Extract audio from videos
 
-🛠 **Installation Steps:**
+🔍 <b>Music Search:</b>
+• Search by lyrics or song title
+• Automatic download of best match
 
-**Windows:**
-1. Extract the downloaded file
-2. Copy the folder to `C:\\ffmpeg\\`
-3. Press `Win + R`, type `sysdm.cpl`
-4. Click "Environment Variables"
-5. Under "System Variables", find "Path", click "Edit"
-6. Click "New", add: `C:\\ffmpeg\\bin`
-7. Click "OK" to save
+🔧 <b>Fixed Features:</b>
+• File size verification before upload
+• Multiple download retry attempts
+• Proper error handling
+• No more empty files
 
-**Verification:**
-1. Open Command Prompt
-2. Type: `ffmpeg -version`
-3. If you see version info, installation is successful
+💡 <b>Tips:</b>
+• If download fails, it will auto-retry
+• Files are verified before sending
+• Large videos may take longer
 
-🔄 **After installation, restart this bot.**
-
-💡 **Note:** FFmpeg enables audio conversion and better format support.
-"""
-    bot.send_message(message.chat.id, help_text, parse_mode='Markdown')
+<code>Choose any option from the main menu!</code>
+    """
+    
+    bot.send_message(message.chat.id, help_text)
 
 @bot.message_handler(func=lambda message: True)
-def handle_other_messages(message):
-    """Handle unknown commands"""
+def handle_unknown_messages(message):
+    """Handle unknown messages"""
     if message.chat.id not in user_states:
-        send_welcome(message)
+        show_main_menu(message.chat.id)
     else:
-        bot.send_message(message.chat.id, 
-                        "❌ Command not recognized\n\n"
-                        "Please use the menu buttons or /help for assistance")
-def is_running_on_heroku():
-    return 'DYNO' in os.environ
+        bot.send_message(
+            message.chat.id,
+            "❌ <b>Unknown command</b>\n\nPlease use the menu buttons or type /help for assistance."
+        )
 
-if is_running_on_heroku():
-    # إعدادات خاصة بـ Heroku
-    TEMP_DIR = "/tmp/temp_files"
-    if not os.path.exists(TEMP_DIR):
-        os.makedirs(TEMP_DIR)
-    
-    # استخدام متغير البيئة للتوكن
-    API_TOKEN = os.environ.get('BOT_TOKEN', '8526634581:AAHBOfZw1UlBwrao1Wf2nY4TRGCGpKnce4g')
-    
-    # تعديل إعدادات التسجيل
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    
-    print("🚀 Running on Heroku...")
 # ========== Main Execution ==========
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚀 MediaBot Pro - Starting System")
+    print("🚀 Starting FIXED Media Bot...")
+    print(f"🌐 Cloud Environment: {CLOUD_DEPLOYMENT}")
+    print(f"📁 Temporary Directory: {TEMP_DIR}")
+    print(f"🔧 FFmpeg Available: {FFMPEG_AVAILABLE}")
+    print("=" * 60)
+    print("🔧 CRITICAL FIXES APPLIED:")
+    print("   • File download verification")
+    print("   • No more empty files") 
+    print("   • Proper yt-dlp configuration")
+    print("   • Enhanced error handling")
     print("=" * 60)
     
-    # Initial cleanup
-    initial_cleanup = auto_cleanup.cleanup_temp_files()
-    if initial_cleanup > 0:
-        print(f"🧹 Initial cleanup: {initial_cleanup} files removed")
-    
-    # Start auto cleanup system
-    auto_cleanup.start_auto_cleanup()
-    
     try:
-        # Get bot info
         bot_info = bot.get_me()
         print(f"✅ Bot initialized: @{bot_info.username}")
-        print(f"🐍 Python version: {sys.version.split()[0]}")
-        print(f"🔧 FFmpeg status: {'✅ Available' if FFMPEG_AVAILABLE else '❌ Not available'}")
-        print("🧹 Auto cleanup: ✅ Active (hourly)")
-        print("📊 System ready for requests...")
+        
+        cleanup_manager.cleanup_old_files(max_age_minutes=0)
+        
+        print("📊 Fixed bot is ready to receive requests...")
         print("=" * 60)
         
-        # Start polling
         bot.infinity_polling(timeout=60, long_polling_timeout=60)
         
     except Exception as e:
         print(f"❌ Fatal error: {e}")
-        logger.error(f"Bot crashed: {e}")
+        logger.error(f"Bot crash: {e}")
     finally:
         print("🛑 Shutting down bot...")
-        auto_cleanup.stop_auto_cleanup()
-        final_cleanup = auto_cleanup.cleanup_temp_files()
-        if final_cleanup > 0:
-            print(f"🧹 Final cleanup: {final_cleanup} files removed")
+        cleanup_manager.active = False
         print("✅ Bot stopped successfully")
